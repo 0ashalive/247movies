@@ -30,32 +30,44 @@ def load_existing_data():
         try:
             with open(JSON_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                return data if isinstance(data, dict) else {}
+                if isinstance(data, dict) and "hero" in data and "categories" in data:
+                    return data
         except Exception as e:
             print(f"⚠️ Error loading {JSON_FILE}: {e}")
-            return {}
-    return {}
+            
+    # Default JSON Structure as requested
+    return {
+        "hero": [],
+        "categories": [
+            {
+                "name": "MOVIES",
+                "items": []
+            }
+        ]
+    }
 
 def save_data(data):
     """Saves updated dictionary to data.json and regenerates latest.m3u."""
     # 1. Save to data.json
     with open(JSON_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=4)
     
-    # 2. Re-generate latest.m3u from all cumulative data
+    # 2. Re-generate latest.m3u from all cumulative items
     bd_time = datetime.utcnow() + timedelta(hours=6)
     now = bd_time.strftime("%Y-%m-%d %I:%M:%S %p (BD Time)")
+    movies_items = data["categories"][0]["items"]
     
     with open(M3U_FILE, 'w', encoding='utf-8') as f:
         f.write('#EXTM3U\n')
         f.write('# Playlist Generated Automatically by Incremental Automation\n')
-        f.write(f'# Total Items: {len(data)}\n')
+        f.write(f'# Total Items: {len(movies_items)}\n')
         f.write(f'# Last Updated: {now}\n\n')
         
-        for key, item in data.items():
-            f.write(item['m3u_entry'])
+        for item in movies_items:
+            m3u_entry = f'#EXTINF:-1 tvg-logo="{item["poster"]}" group-title="{GROUP_NAME}", {item["title"]}\n{item["stream_url"]}|Referer={item["headers"]["Referer"]}\n'
+            f.write(m3u_entry)
             
-    print(f"💾 Updated {JSON_FILE} & {M3U_FILE} | Total Movies Saved: {len(data)}")
+    print(f"💾 Updated {JSON_FILE} & {M3U_FILE} | Total Movies Saved: {len(movies_items)}")
 
 def process_movie(watch_link, scraper):
     """Extracts raw video link, title, and poster for a single movie."""
@@ -89,16 +101,17 @@ def process_movie(watch_link, scraper):
         
         file_name = actual_link.split('/')[-1]
         file_name = re.sub(r'\[Fibwatch\.Com\]|\.mkv|\.mp4', '', file_name, flags=re.IGNORECASE).replace('.', ' ').strip()
-        final_video_link = f"{actual_link}|Referer={BASE_URL}/"
         
-        m3u_entry = f'#EXTINF:-1 tvg-logo="{poster}" group-title="{GROUP_NAME}", {file_name}\n{final_video_link}\n'
+        movie_id = re.sub(r'[^a-zA-Z0-9]', '_', file_name).lower()
         
         return {
+            "id": movie_id,
             "title": file_name,
             "poster": poster,
-            "stream_url": final_video_link,
-            "m3u_entry": m3u_entry,
-            "watch_link": watch_link
+            "stream_url": actual_link,
+            "headers": {
+                "Referer": f"{BASE_URL}/"
+            }
         }
         
     except Exception:
@@ -126,11 +139,14 @@ def main():
     print("🚀 Starting 1-150 Page Incremental Auto-Accumulating Scraper...")
     scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
     
-    # Load existing cumulative database
+    # 1. Load existing cumulative database
     database = load_existing_data()
-    print(f"📁 Existing records in database: {len(database)}")
+    existing_items = database["categories"][0]["items"]
+    existing_ids = {item["id"] for item in existing_items}
+    
+    print(f"📁 Existing items in database: {len(existing_items)}")
 
-    # Iterate page by page (1 to 150)
+    # 2. Iterate page by page (1 to 150)
     for page in range(1, TOTAL_PAGES + 1):
         print(f"\n🔎 Processing Page {page}/{TOTAL_PAGES}...")
         
@@ -154,22 +170,26 @@ def main():
             for future in concurrent.futures.as_completed(futures):
                 movie_info = future.result()
                 if movie_info:
-                    movie_id = movie_info['title']
-                    
-                    # Store without deleting existing items
-                    if movie_id not in database:
-                        database[movie_id] = movie_info
+                    # Prevent duplicates and append without deleting old data
+                    if movie_info["id"] not in existing_ids:
+                        existing_ids.add(movie_info["id"])
+                        database["categories"][0]["items"].append(movie_info)
+                        
+                        # Populate hero list (up to first 5 latest movies)
+                        if len(database["hero"]) < 5:
+                            database["hero"].append(movie_info)
+                            
                         new_added += 1
                         print(f"   ➕ Added: {movie_info['title']}")
 
-        # Save after completing each page
+        # 3. Save progress immediately after processing each page
         if new_added > 0:
             save_data(database)
             print(f"✅ Page {page} complete! {new_added} new items added.")
         else:
-            print(f"ℹ️ Page {page} complete! No new items found.")
+            print(f"ℹ️ Page {page} complete! No new items (already exist in database).")
 
-    print("\n🎉 Scraping Completed! All 1-150 pages processed without losing any data.")
+    print("\n🎉 Scraping Completed! All 1-150 pages processed and saved in specified JSON structure.")
 
 if __name__ == "__main__":
     main()
