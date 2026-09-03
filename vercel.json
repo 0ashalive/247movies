@@ -6,6 +6,12 @@
       "use": "@vercel/python"
     }
   ],
+  "crons": [
+    {
+      "path": "/api/index.py",
+      "schedule": "* * * * *"
+    }
+  ],
   "routes": [
     {
       "src": "/data.json",
@@ -16,7 +22,7 @@
       "dest": "api/m3u.py"
     },
     {
-      "src": "/scan",
+      "src": "/(.*)",
       "dest": "api/index.py"
     }
   ]
