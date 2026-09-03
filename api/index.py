@@ -3,13 +3,21 @@ import cloudscraper
 from bs4 import BeautifulSoup
 import re
 import json
+import os
 from upstash_redis import Redis
-
-# Vercel Free Storage/Database Connection
-redis = Redis.from_env()
 
 BASE_URL = "https://fibwatch.art"
 IMAGE_PROXY = "https://srhady-live-stream.hf.space/image?url="
+
+def get_redis():
+    try:
+        url = os.environ.get("UPSTASH_REDIS_REST_URL")
+        token = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
+        if url and token:
+            return Redis(url=url, token=token)
+    except Exception:
+        pass
+    return None
 
 def get_resolution(text):
     match = re.search(r'(\d{3,4})p', text, re.IGNORECASE)
@@ -21,7 +29,7 @@ def get_resolution(text):
 
 def process_movie(watch_link, scraper):
     try:
-        res = scraper.get(watch_link, timeout=10)
+        res = scraper.get(watch_link, timeout=8)
         watch_soup = BeautifulSoup(res.text, 'html.parser')
         
         actual_link = None
@@ -52,7 +60,6 @@ def process_movie(watch_link, scraper):
         file_name = re.sub(r'\[Fibwatch\.Com\]|\.mkv|\.mp4', '', file_name, flags=re.IGNORECASE).replace('.', ' ').strip()
         movie_id = re.sub(r'[^a-zA-Z0-9]', '_', file_name).lower()
 
-        # আপনার দেওয়া জেসন অবজেক্ট ফরম্যাট
         return {
             "id": movie_id,
             "title": file_name,
@@ -67,22 +74,32 @@ def process_movie(watch_link, scraper):
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # ১. আগে কত নম্বর পেজ সেভ হয়েছিল তা বের করা (১ থেকে ১৫০)
-        current_page = redis.get("current_processing_page")
-        current_page = int(current_page) if current_page else 1
-
-        scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
-        url = f"{BASE_URL}/videos/latest?page_id={current_page}"
-        
-        added_count = 0
         try:
+            redis = get_redis()
+            current_page = 1
+            
+            if redis:
+                stored_page = redis.get("current_processing_page")
+                current_page = int(stored_page) if stored_page else 1
+
+            scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
+            url = f"{BASE_URL}/videos/latest?page_id={current_page}"
+            
+            added_count = 0
             response = scraper.get(url, timeout=10)
             soup = BeautifulSoup(response.text, 'html.parser')
-            watch_links = [link['href'] for link in soup.find_all('a', href=True) if '/watch/' in link['href'] and link['endswith']('.html') if hasattr(link, 'endswith') or link['href'].endswith('.html')]
             
-            # ২. পূর্বে সেভ হওয়া ডাটা লোড করা (যাতে ডিলিট না হয়)
-            all_movies_raw = redis.get("data_json_db")
-            all_movies = json.loads(all_movies_raw) if all_movies_raw else {}
+            watch_links = []
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                if '/watch/' in href and href.endswith('.html'):
+                    watch_links.append(href)
+            
+            all_movies = {}
+            if redis:
+                all_movies_raw = redis.get("data_json_db")
+                if all_movies_raw:
+                    all_movies = json.loads(all_movies_raw)
 
             best_links = {}
             for link in set(watch_links):
@@ -94,35 +111,33 @@ class handler(BaseHTTPRequestHandler):
                 if base_name not in best_links or res > get_resolution(best_links[base_name]):
                     best_links[base_name] = full_link
 
-            # ৩. জেসন ফরম্যাট অনুযায়ী নতুন ডাটা অ্যাড করা
             for base_name, w_link in best_links.items():
                 movie = process_movie(w_link, scraper)
                 if movie and movie["id"] not in all_movies:
                     all_movies[movie["id"]] = movie
                     added_count += 1
             
-            # ৪. জেসন ফাইল ডাটাবেজে স্থায়ীভাবে সেভ রাখা
-            redis.set("data_json_db", json.dumps(all_movies))
+            if redis:
+                redis.set("data_json_db", json.dumps(all_movies))
+                next_page = current_page + 1 if current_page < 150 else 1
+                redis.set("current_processing_page", next_page)
 
-            # ৫. পরবর্তী পেজে শিফট করা (১৫০ পেজ পার হলে আবার ১ থেকে শুরু হবে)
-            next_page = current_page + 1 if current_page < 150 else 1
-            redis.set("current_processing_page", next_page)
+            res_data = {
+                "status": "success",
+                "page_processed": current_page,
+                "new_items_added": added_count,
+                "next_page": current_page + 1 if current_page < 150 else 1
+            }
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(res_data, indent=2).encode('utf-8'))
 
         except Exception as e:
-            pass
-
-        # রেসপন্স আউটপুট
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        
-        res_data = {
-            "status": "success",
-            "page_processed": current_page,
-            "new_items_added": added_count,
-            "next_page": current_page + 1 if current_page < 150 else 1,
-            "message": f"Page {current_page} data saved successfully to data.json format."
-        }
-        self.wfile.write(json.dumps(res_data, indent=2).encode('utf-8'))
-        
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            
