@@ -2,11 +2,19 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/index.py",
+      "src": "api/*.py",
       "use": "@vercel/python"
     }
   ],
   "routes": [
+    {
+      "src": "/playlist",
+      "dest": "api/playlist.py"
+    },
+    {
+      "src": "/scan",
+      "dest": "api/index.py"
+    },
     {
       "src": "/(.*)",
       "dest": "api/index.py"
