@@ -10,7 +10,7 @@ class handler(BaseHTTPRequestHandler):
         all_movies_raw = redis.get("all_movies_db")
         all_movies_dict = json.loads(all_movies_raw) if all_movies_raw else {}
         
-        m3u_content = "#EXTM3U\n# Playlist Generated Automatically - All Pages Cumulative Data\n\n"
+        m3u_content = "#EXTM3U\n# Playlist Generated Automatically - All Pages Data\n\n"
         
         for movie in all_movies_dict.values():
             m3u_content += f'#EXTINF:-1 tvg-logo="{movie["poster"]}" group-title="{GROUP_NAME}", {movie["title"]}\n{movie["stream_url"]}|Referer={movie["headers"]["Referer"]}\n'
