@@ -1,3 +1,4 @@
 cloudscraper
 beautifulsoup4
 upstash-redis
+urllib3<2.0.0
