@@ -1,12 +1,11 @@
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlparse
 import cloudscraper
 from bs4 import BeautifulSoup
 import re
 import json
 from upstash_redis import Redis
 
-# Database Connection
+# Database Connection (Upstash Redis)
 redis = Redis.from_env()
 
 BASE_URL = "https://fibwatch.art"
@@ -67,12 +66,12 @@ def process_movie(watch_link, scraper):
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        parsed_path = urlparse(self.path)
-        query_params = parse_qs(parsed_path.query)
-        page = int(query_params.get('page', [1])[0])
+        # ১. আগে কোথায় থেমেছিল তা ডাটাবেজ থেকে রিড করা (ডিফল্ট: ১)
+        current_page = redis.get("current_processing_page")
+        current_page = int(current_page) if current_page else 1
 
         scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
-        url = f"{BASE_URL}/videos/latest?page_id={page}"
+        url = f"{BASE_URL}/videos/latest?page_id={current_page}"
         
         added_count = 0
         try:
@@ -80,7 +79,7 @@ class handler(BaseHTTPRequestHandler):
             soup = BeautifulSoup(response.text, 'html.parser')
             watch_links = [link['href'] for link in soup.find_all('a', href=True) if '/watch/' in link['href'] and link['href'].endswith('.html')]
             
-            # আগের সেভ থাকা ডাটা নিয়ে আসা
+            # ২. আগের জমানো সব ডাটা লোড করা
             all_movies_raw = redis.get("all_movies_db")
             all_movies = json.loads(all_movies_raw) if all_movies_raw else {}
 
@@ -94,14 +93,19 @@ class handler(BaseHTTPRequestHandler):
                 if base_name not in best_links or res > get_resolution(best_links[base_name]):
                     best_links[base_name] = full_link
 
+            # ৩. নতুন পেজের ডাটা অ্যাপেন্ড (Add) করা
             for base_name, w_link in best_links.items():
                 movie = process_movie(w_link, scraper)
                 if movie and movie["id"] not in all_movies:
                     all_movies[movie["id"]] = movie
                     added_count += 1
             
-            # নতুন ডাটা সেভ করে রাখা
+            # ৪. আপডেট হওয়া অল ডাটা ডাটাবেজে সেভ রাখা
             redis.set("all_movies_db", json.dumps(all_movies))
+
+            # ৫. পরবর্তী পেজ সেট করা (১৫০ পার হলে আবার ১ এ ফিরে যাবে)
+            next_page = current_page + 1 if current_page < 150 else 1
+            redis.set("current_processing_page", next_page)
 
         except Exception as e:
             pass
@@ -113,9 +117,9 @@ class handler(BaseHTTPRequestHandler):
         
         res_data = {
             "status": "success",
-            "page_scanned": page,
+            "page_processed": current_page,
             "new_items_added": added_count,
-            "message": f"Page {page} processed and saved to database successfully."
+            "next_page_to_process": current_page + 1 if current_page < 150 else 1
         }
         self.wfile.write(json.dumps(res_data, indent=2).encode('utf-8'))
         
