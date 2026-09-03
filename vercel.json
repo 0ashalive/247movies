@@ -8,16 +8,16 @@
   ],
   "routes": [
     {
-      "src": "/playlist",
-      "dest": "api/playlist.py"
+      "src": "/data.json",
+      "dest": "api/data.py"
     },
     {
-      "src": "/scan",
-      "dest": "api/index.py"
+      "src": "/latest.m3u",
+      "dest": "api/m3u.py"
     },
     {
       "src": "/(.*)",
-      "dest": "api/index.py"
+      "dest": "api/data.py"
     }
   ]
 }
