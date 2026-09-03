@@ -1,24 +1,44 @@
 from http.server import BaseHTTPRequestHandler
 import json
+import os
 from upstash_redis import Redis
 
-redis = Redis.from_env()
-GROUP_NAME = "Fibwatch Latest"
+def get_redis():
+    try:
+        url = os.environ.get("UPSTASH_REDIS_REST_URL")
+        token = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
+        if url and token:
+            return Redis(url=url, token=token)
+    except Exception:
+        pass
+    return None
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        all_movies_raw = redis.get("all_movies_db")
-        all_movies_dict = json.loads(all_movies_raw) if all_movies_raw else {}
-        
-        m3u_content = "#EXTM3U\n# Playlist Generated Automatically - All Pages Data\n\n"
-        
-        for movie in all_movies_dict.values():
-            m3u_content += f'#EXTINF:-1 tvg-logo="{movie["poster"]}" group-title="{GROUP_NAME}", {movie["title"]}\n{movie["stream_url"]}|Referer={movie["headers"]["Referer"]}\n'
+        all_items = []
+        try:
+            redis = get_redis()
+            if redis:
+                all_movies_raw = redis.get("data_json_db")
+                if all_movies_raw:
+                    all_movies_dict = json.loads(all_movies_raw)
+                    all_items = list(all_movies_dict.values())
+        except Exception:
+            pass
+
+        output = {
+            "hero": all_items[:5] if len(all_items) >= 5 else all_items,
+            "categories": [
+                {
+                    "name": "MOVIES",
+                    "items": all_items
+                }
+            ]
+        }
 
         self.send_response(200)
-        self.send_header('Content-Type', 'audio/x-mpegurl')
-        self.send_header('Content-Disposition', 'inline; filename="latest.m3u"')
+        self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
-        self.wfile.write(m3u_content.encode('utf-8'))
+        self.wfile.write(json.dumps(output, indent=4).encode('utf-8'))
         
