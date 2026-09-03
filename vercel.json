@@ -11,6 +11,11 @@
       "src": "/(.*)",
       "dest": "api/index.py"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/scrape?pages=all",
+      "schedule": "0 */6 * * *"
+    }
   ]
 }
-
