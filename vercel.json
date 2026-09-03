@@ -16,8 +16,8 @@
       "dest": "api/m3u.py"
     },
     {
-      "src": "/(.*)",
-      "dest": "api/data.py"
+      "src": "/scan",
+      "dest": "api/index.py"
     }
   ]
 }
