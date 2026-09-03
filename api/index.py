@@ -1,16 +1,15 @@
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response
 import cloudscraper
 from bs4 import BeautifulSoup
 import re
 from datetime import datetime, timedelta
 import concurrent.futures
 from urllib.parse import urlparse
-import vercel_blob
 
 app = Flask(__name__)
 
 BASE_URL = "https://fibwatch.art"
-FILE_NAME = "latest_movies.m3u"
+PAGES_TO_SCAN = 150  # Keep page count low to avoid Vercel Function timeouts
 GROUP_NAME = "Fibwatch Latest"
 IMAGE_PROXY = "https://srhady-live-stream.hf.space/image?url="
 
@@ -22,13 +21,9 @@ def get_resolution(text):
         return 2160
     return 0
 
-def get_domain(url):
-    parsed_uri = urlparse(url)
-    return f"{parsed_uri.scheme}://{parsed_uri.netloc}"
-
 def process_movie(base_name, watch_link, scraper):
     try:
-        res = scraper.get(watch_link, timeout=5)
+        res = scraper.get(watch_link, timeout=8)
         watch_soup = BeautifulSoup(res.text, 'html.parser')
         
         actual_link = None
@@ -59,8 +54,7 @@ def process_movie(base_name, watch_link, scraper):
         file_name = re.sub(r'\[Fibwatch\.Com\]|\.mkv|\.mp4', '', file_name, flags=re.IGNORECASE).replace('.', ' ').strip()
         final_video_link = f"{actual_link}|Referer={BASE_URL}/"
         
-        m3u_entry = f'#EXTINF:-1 tvg-logo="{poster}" group-title="{GROUP_NAME}", {file_name}\n{final_video_link}\n'
-        return m3u_entry, get_domain(actual_link)
+        return f'#EXTINF:-1 tvg-logo="{poster}" group-title="{GROUP_NAME}", {file_name}\n{final_video_link}\n'
     except Exception:
         return None
 
@@ -68,7 +62,7 @@ def scan_page(page_num, scraper):
     url = f"{BASE_URL}/videos/latest?page_id={page_num}"
     found_movies = []
     try:
-        response = scraper.get(url, timeout=5)
+        response = scraper.get(url, timeout=8)
         soup = BeautifulSoup(response.text, 'html.parser')
         watch_links = [link['href'] for link in soup.find_all('a', href=True) if '/watch/' in link['href'] and link['href'].endswith('.html')]
         
@@ -81,55 +75,38 @@ def scan_page(page_num, scraper):
     except Exception:
         return []
 
-@app.route('/api/scrape', methods=['GET'])
-def run_scraper():
-    try:
-        scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
-        
-        # Limit pages to 3 max to avoid hitting the 60s execution timeout
-        pages_to_scan = int(request.args.get('pages', 3))
-
-        new_movies_links = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            futures = {executor.submit(scan_page, p, scraper): p for p in range(1, pages_to_scan + 1)}
-            for future in concurrent.futures.as_completed(futures):
-                for base_name, full_link in future.result():
-                    current_res = get_resolution(full_link)
-                    if base_name in new_movies_links:
-                        if current_res > get_resolution(new_movies_links[base_name]):
-                            new_movies_links[base_name] = full_link
-                    else:
-                        new_movies_links[base_name] = full_link
-
-        new_entries = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(process_movie, b_name, w_link, scraper) for b_name, w_link in new_movies_links.items()]
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                if result:
-                    entry, domain = result
-                    new_entries.append(entry)
-
-        bd_time = datetime.utcnow() + timedelta(hours=6)
-        now = bd_time.strftime("%Y-%m-%d %I:%M:%S %p (BD Time)")
-        
-        header = f"#EXTM3U\n# Playlist Generated Automatically\n# Last Updated: {now}\n\n"
-        final_content = header + "".join(new_entries)
-
-        blob_res = vercel_blob.put(FILE_NAME, final_content.encode('utf-8'), add_random_suffix=False)
-
-        return jsonify({
-            "status": "success",
-            "scanned_pages": pages_to_scan,
-            "new_entries_added": len(new_entries),
-            "playlist_url": blob_res['url']
-        })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
 @app.route('/', methods=['GET'])
-def home():
-    return Response("#EXTM3U\n# Fibwatch Service Active", mimetype='text/plain')
+@app.route('/api/index', methods=['GET'])
+def generate_m3u():
+    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
+    new_movies_links = {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(scan_page, p, scraper): p for p in range(1, PAGES_TO_SCAN + 1)}
+        for future in concurrent.futures.as_completed(futures):
+            for base_name, full_link in future.result():
+                current_res = get_resolution(full_link)
+                if base_name in new_movies_links:
+                    if current_res > get_resolution(new_movies_links[base_name]):
+                        new_movies_links[base_name] = full_link
+                else:
+                    new_movies_links[base_name] = full_link
+
+    m3u_entries = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(process_movie, b_name, w_link, scraper) for b_name, w_link in new_movies_links.items()]
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res:
+                m3u_entries.append(res)
+
+    bd_time = datetime.utcnow() + timedelta(hours=6)
+    now = bd_time.strftime("%Y-%m-%d %I:%M:%S %p (BD Time)")
+    
+    header = "#EXTM3U\n# Playlist Generated Automatically\n" + f"# Last Updated: {now}\n\n"
+    content = header + "".join(m3u_entries)
+
+    return Response(content, mimetype='text/plain')
 
 if __name__ == "__main__":
     app.run()
