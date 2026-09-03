@@ -1,4 +1,4 @@
 cloudscraper
 beautifulsoup4
 flask
-
+vercel-blob
