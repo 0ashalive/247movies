@@ -1,27 +1,8 @@
 {
-  "version": 2,
-  "builds": [
+  "rewrites": [
     {
-      "src": "api/*.py",
-      "use": "@vercel/python"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/data.json",
-      "dest": "api/data.py"
-    },
-    {
-      "src": "/latest.m3u",
-      "dest": "api/m3u.py"
-    },
-    {
-      "src": "/index",
-      "dest": "api/index.py"
-    },
-    {
-      "src": "/",
-      "dest": "api/index.py"
+      "source": "/(.*)",
+      "destination": "/api/index.py"
     }
   ]
 }
