@@ -7,10 +7,19 @@ import urllib.request
 class handler(BaseHTTPRequestHandler):
 
   def do_GET(self):
+    # যদি কেউ ব্রাউজার থেকে সরাসরি ঢুকতে চায় (HTML Accept Header থাকলে) Telegram-এ রিডাইরেক্ট হবে
+    accept_header = self.headers.get("Accept", "")
+
+    if "text/html" in accept_header:
+      self.send_response(302)  # Temporary Redirect
+      self.send_header("Location", "https://t.me/ashaott")
+      self.end_headers()
+      return
+
+    # অ্যাপ বা API কলের জন্য JSON ডাটা প্রসেসিং
     m3u_url = "https://raw.githubusercontent.com/srhady/join_telegram_chennal-livesportsplay/refs/heads/main/latest_movies.m3u"
 
     try:
-      # M3U ফাইল ডাউনলোড (User-Agent সহ)
       req = urllib.request.Request(
           m3u_url, headers={"User-Agent": "Mozilla/5.0"}
       )
@@ -25,28 +34,23 @@ class handler(BaseHTTPRequestHandler):
       while i < total_lines:
         line = lines[i].strip()
 
-        # #EXTINF লাইন শনাক্ত করা
         if line.startswith("#EXTINF:"):
-          # Title বের করা
           title = ""
           title_match = re.search(r",([^,]+)$", line)
           if title_match:
             title = title_match.group(1).strip()
 
-          # Poster (tvg-logo) বের করা
           poster = ""
           logo_match = re.search(r'tvg-logo="([^"]+)"', line)
           if logo_match:
             poster = logo_match.group(1)
 
-          # পরের লাইনে Stream URL ও Headers থাকে
           i += 1
           if i < total_lines:
             url_line = lines[i].strip()
             stream_url = url_line
             headers = {}
 
-            # URL এবং Referer আলাদা করা (যদি pipe '|' থাকে)
             if "|" in url_line:
               parts = url_line.split("|", 1)
               stream_url = parts[0]
@@ -55,7 +59,6 @@ class handler(BaseHTTPRequestHandler):
                 referer_parts = parts[1].split("Referer=")
                 headers = {"Referer": referer_parts[1]}
 
-            # আইটেম অবজেক্ট তৈরি
             item = {
                 "id": title,
                 "title": title,
@@ -68,19 +71,14 @@ class handler(BaseHTTPRequestHandler):
 
         i += 1
 
-      # প্রথম ৫টি আইটেম Hero-তে রাখা
       hero_items = all_items[:5]
-
-      # বাকি সব আইটেম Movies-এ রাখা
       movie_items = all_items[5:]
 
-      # ফাইনাল JSON স্ট্রাকচার
       final_data = {
           "hero": hero_items,
           "categories": [{"name": "MOVIES", "items": movie_items}],
       }
 
-      # Vercel JSON Response পাঠানো
       self.send_response(200)
       self.send_header("Content-Type", "application/json")
       self.send_header("Access-Control-Allow-Origin", "*")
@@ -95,4 +93,3 @@ class handler(BaseHTTPRequestHandler):
       self.end_headers()
       error_response = json.dumps({"error": str(e)})
       self.wfile.write(error_response.encode("utf-8"))
-        
